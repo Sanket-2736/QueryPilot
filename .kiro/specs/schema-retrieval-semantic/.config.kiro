@@ -1,0 +1,48 @@
+{
+  "specName": "schema-retrieval-semantic",
+  "displayName": "Schema Retrieval and Semantic Layer",
+  "step": 2,
+  "buildOrder": "QueryPilot Build Order",
+  "description": "Intelligent schema retrieval with two modes (full for ≤20 tables, embedding-based for >20 tables), semantic layer for business term definitions, FK expansion, one-to-many warnings, and schema retrieval recall metrics.",
+  "status": "ready",
+  "createdAt": "2025-01-15T00:00:00Z",
+  "files": [
+    "requirements.md",
+    "design.md",
+    "tasks.md"
+  ],
+  "dependencies": [
+    {
+      "spec": "seed-db-baseline",
+      "reason": "Requires seed database schema and baseline evaluation harness from Step 1"
+    }
+  ],
+  "references": [
+    "docs/PROJECT_PLAN.md (Section 4.6: Schema retrieval design)",
+    ".kiro/steering/product.md",
+    ".kiro/steering/tech.md",
+    ".kiro/steering/structure.md"
+  ],
+  "keywords": [
+    "schema-retrieval",
+    "semantic-layer",
+    "embeddings",
+    "pgvector",
+    "foreign-key-expansion",
+    "caching",
+    "business-terms",
+    "schema-metrics"
+  ],
+  "estimatedHours": 16.5,
+  "taskCount": 21,
+  "componentTiers": [
+    "Schema Introspection",
+    "Caching Layer",
+    "Full Schema (Mode A)",
+    "Semantic Layer",
+    "Embedding-Based (Mode B)",
+    "FK Expansion & Integration",
+    "Metrics & Testing",
+    "Configuration & Docs"
+  ]
+}

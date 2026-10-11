@@ -1,0 +1,19 @@
+# Semantic Layer: Business Term Definitions
+# Maps natural language concepts to actual SQL calculations
+# This solves ambiguity problems far better than hoping the LLM guesses
+
+terms:
+  revenue:
+    definition: "Total paid revenue"
+    calculation: "SUM(order_items.quantity * order_items.unit_price) WHERE orders.status = 'paid'"
+    tables: [orders, order_items]
+
+  customer_lifetime_value:
+    definition: "Total revenue from a customer"
+    calculation: "SUM(order_items.quantity * order_items.unit_price) WHERE orders.status = 'paid' GROUP BY customers.id"
+    tables: [customers, orders, order_items]
+
+  average_order_value:
+    definition: "Average revenue per order"
+    calculation: "SUM(order_items.quantity * order_items.unit_price) / COUNT(DISTINCT orders.id)"
+    tables: [orders, order_items]

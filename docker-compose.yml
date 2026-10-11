@@ -1,0 +1,145 @@
+version: "3.9"
+
+services:
+  # App Database (PostgreSQL 16)
+  # Stores conversations, query logs, and evaluation results
+  app_db:
+    image: postgres:16-alpine
+    container_name: querypilot_app_db
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
+      POSTGRES_DB: querypilot_app
+      POSTGRES_INITDB_ARGS: "-c statement_timeout=30000"
+    ports:
+      - "5432:5432"
+    volumes:
+      - app_db_data:/var/lib/postgresql/data
+      - ./seed/init_app_db.sh:/docker-entrypoint-initdb.d/02-init_app_db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d querypilot_app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - querypilot
+
+  # Target Database (PostgreSQL 16)
+  # Analytics data queried by the agent (READ-ONLY for app)
+  target_db:
+    image: postgres:16-alpine
+    container_name: querypilot_target_db
+    environment:
+      POSTGRES_USER: analytics_user
+      POSTGRES_PASSWORD: analytics_password
+      POSTGRES_DB: querypilot_target
+      POSTGRES_INITDB_ARGS: "-c statement_timeout=5000"
+    ports:
+      - "5433:5432"
+    volumes:
+      - target_db_data:/var/lib/postgresql/data
+      - ./seed/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user -d querypilot_target"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - querypilot
+
+  # Redis
+  # Checkpoints for in-flight runs, schema cache, rate limits
+  redis:
+    image: redis:7-alpine
+    container_name: querypilot_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - querypilot
+
+  # Langfuse (optional, for observability)
+  # Traces all LLM calls, tool calls, and agent steps
+  langfuse:
+    image: langfuse/langfuse:latest
+    container_name: querypilot_langfuse
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse_user:langfuse_password@langfuse_db:5432/langfuse
+      NEXTAUTH_SECRET: "supersecret-change-in-production"
+    depends_on:
+      langfuse_db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - querypilot
+
+  # Langfuse Database
+  langfuse_db:
+    image: postgres:16-alpine
+    container_name: querypilot_langfuse_db
+    environment:
+      POSTGRES_USER: langfuse_user
+      POSTGRES_PASSWORD: langfuse_password
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse_user -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - querypilot
+
+  # QueryPilot API
+  # Main FastAPI service
+  api:
+    build: .
+    container_name: querypilot_api
+    ports:
+      - "8000:8000"
+    environment:
+      DEBUG: "${DEBUG:-false}"
+      API_PORT: "8000"
+      APP_DB_URL: postgresql://app_user:app_password@app_db:5432/querypilot_app
+      TARGET_DB_URL: postgresql://querypilot_ro:readonly_password@target_db:5432/querypilot_target
+      TARGET_DB_READONLY_ROLE: querypilot_ro
+      REDIS_URL: redis://redis:6379
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4-turbo}
+    depends_on:
+      app_db:
+        condition: service_healthy
+      target_db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - querypilot
+
+networks:
+  querypilot:
+    driver: bridge
+
+volumes:
+  app_db_data:
+  target_db_data:
+  langfuse_db_data:
