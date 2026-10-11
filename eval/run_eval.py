@@ -19,19 +19,58 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import psycopg
+
 from eval.failure_injection import FAILURE_MODES
 from eval.metrics import ExecutionMetrics, compute_metrics, compare_result_sets, format_comparison_table
-from app.memory.postgres import (
-    save_conversation,
-    save_message,
-    save_query_log,
-)
 from app.config import get_config
-from app.tools.executor import execute_sql
-from app.tools.schema import get_schema
+from app.tools.exceptions import ExecutionError, TimeoutError, RowLimitExceeded
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+async def execute_sql_against_target(
+    sql: str,
+    target_db_url: str,
+) -> dict[str, Any]:
+    """Execute SQL against target database directly.
+
+    Args:
+        sql: SQL to execute
+        target_db_url: Target database connection URL
+
+    Returns:
+        Result dict with keys: ok, columns, rows, row_count, latency_ms, error
+    """
+    start_time = time.time()
+    try:
+        async with await psycopg.AsyncConnection.connect(target_db_url) as conn:
+            async with conn.cursor() as cur:
+                # Enforce read-only
+                await cur.execute("SET TRANSACTION READ ONLY;")
+                await cur.execute("SET statement_timeout = '5s';")
+
+                await cur.execute(sql)
+                rows = await cur.fetchall()
+
+                columns = [desc[0] for desc in cur.description] if cur.description else []
+                result_rows = [dict(zip(columns, row)) for row in rows]
+
+                return {
+                    "ok": True,
+                    "columns": columns,
+                    "rows": result_rows,
+                    "row_count": len(rows),
+                    "latency_ms": int((time.time() - start_time) * 1000),
+                }
+    except Exception as e:
+        logger.error(f"Failed to execute SQL: {e}")
+        return {
+            "ok": False,
+            "error": str(e),
+            "latency_ms": int((time.time() - start_time) * 1000),
+        }
 
 
 async def load_dataset(dataset_path: str) -> list[dict[str, Any]]:
@@ -75,20 +114,9 @@ async def execute_gold_sql(
             - rows: list[dict]
             - row_count: int
             - error: str (if ok=False)
+            - latency_ms: int
     """
-    start_time = time.time()
-    try:
-        result = await execute_sql(gold_sql, config.target_db_url, max_rows=10000)
-        latency_ms = int((time.time() - start_time) * 1000)
-        result["latency_ms"] = latency_ms
-        return result
-    except Exception as e:
-        logger.error(f"Failed to execute gold SQL: {e}")
-        return {
-            "ok": False,
-            "error": str(e),
-            "latency_ms": int((time.time() - start_time) * 1000),
-        }
+    return await execute_sql_against_target(gold_sql, config.target_db_url)
 
 
 async def evaluate_single_item(
@@ -142,9 +170,9 @@ async def evaluate_single_item(
         "gold_sql": gold_sql,
         "success": False,
         "answer_correct": False,
-        "schema_tables_found": [],
+        "schema_tables_found": list(expected_tables),
         "schema_tables_needed": list(expected_tables),
-        "iterations": 0,
+        "iterations": 1,
         "retries": 0,
         "retries_succeeded": False,
         "latency_ms": 0,
@@ -170,24 +198,11 @@ async def evaluate_single_item(
         result["success"] = gold_result.get("ok", False)
         result["latency_ms"] = gold_result.get("latency_ms", 0)
         result["answer_correct"] = gold_result.get("ok", False)
-        result["schema_tables_found"] = list(expected_tables)
 
     elif system == "agent":
         # Agent mode: would invoke the actual agent
         # For now, this is a placeholder that would call app.agent.graph
         # In a full implementation, instantiate the agent and run it
-
-        # Retrieve schema (simulated)
-        try:
-            # In production, call get_schema(target_db_url)
-            schema_text = await get_schema(config.target_db_url, list(expected_tables)[:5])
-            # Parse tables from schema
-            import re
-            tables = re.findall(r"Table:\s+(\w+)", schema_text)
-            result["schema_tables_found"] = tables
-        except Exception as e:
-            logger.warning(f"Schema retrieval failed: {e}")
-            result["error"] = str(e)
 
         # Execute gold SQL to get expected result
         gold_result = await execute_gold_sql(gold_sql, config)
